@@ -15,6 +15,39 @@ const COSTS = {
   park: 750
 };
 
+const ROAD_TYPES = {
+  local: {
+    label: "Nebenstraße",
+    cost: 50,
+    capacity: 8,
+    speed: 0.9,
+    maintenance: 0.5,
+    width: 0.54,
+    asphalt: "#4b5563",
+    marking: "#e5e7a6"
+  },
+  avenue: {
+    label: "Hauptstraße",
+    cost: 150,
+    capacity: 18,
+    speed: 1.2,
+    maintenance: 1.2,
+    width: 0.68,
+    asphalt: "#3f4b59",
+    marking: "#facc15"
+  },
+  highway: {
+    label: "Schnellstraße",
+    cost: 350,
+    capacity: 32,
+    speed: 1.7,
+    maintenance: 2.5,
+    width: 0.78,
+    asphalt: "#293746",
+    marking: "#f8fafc"
+  }
+};
+
 const CAPACITY = {
   residential: 12
 };
@@ -39,9 +72,6 @@ const BASE_EXPENSE = {
   industrial: 10
 };
 
-const ROAD_MAINTENANCE_PER_TILE = 0.5;
-
-const ROAD_CAPACITY = 8;
 const MAX_VEHICLES = 750;
 
 // 1x = 20 reale Sekunden pro Spielmonat.
@@ -75,6 +105,7 @@ let month = 1;
 
 let selectedTool = "select";
 let roadRotation = 0;
+let selectedRoadType = "local";
 
 let zoom = 1;
 let offsetX = 0;
@@ -118,6 +149,10 @@ const els = {
   commercial: document.getElementById("commercial"),
   industrial: document.getElementById("industrial"),
   parks: document.getElementById("parks"),
+  localRoads: document.getElementById("localRoads"),
+  avenueRoads: document.getElementById("avenueRoads"),
+  highwayRoads: document.getElementById("highwayRoads"),
+  intersections: document.getElementById("intersections"),
 
   residentialZones: document.getElementById("residentialZones"),
   commercialZones: document.getElementById("commercialZones"),
@@ -170,7 +205,9 @@ const els = {
   loanList: document.getElementById("loanList"),
 
   pauseGame: document.getElementById("pauseGame"),
-  speedButtons: document.querySelectorAll(".speed-button")
+  speedButtons: document.querySelectorAll(".speed-button"),
+  roadTypeSelect: document.getElementById("roadTypeSelect"),
+  roadCostLabel: document.querySelector('[data-tool="road"] small')
 };
 
 
@@ -306,12 +343,14 @@ function hasAdjacentRoad(x, y) {
 function drawRoad(x, y) {
   const p = worldToScreen(x, y);
   const s = TILE * zoom;
+  const tile = getTile(x, y);
+  const style = ROAD_TYPES[tile?.roadType] || ROAD_TYPES.local;
   const mask = roadMask(x, y);
-  const width = Math.max(8, s * 0.56);
+  const width = Math.max(8, s * style.width);
   const cx = p.x + s / 2;
   const cy = p.y + s / 2;
 
-  ctx.fillStyle = "#454545";
+  ctx.fillStyle = style.asphalt;
   ctx.fillRect(p.x, p.y, s, s);
 
   if (mask === 0) {
@@ -329,9 +368,15 @@ function drawRoad(x, y) {
     if (mask & 8) ctx.fillRect(p.x, cy - width / 2, s / 2, width);
   }
 
-  ctx.strokeStyle = "#e5e7a6";
+  const connections = [1, 2, 4, 8].filter(bit => mask & bit).length;
+  if (connections >= 3) {
+    ctx.fillStyle = style.asphalt;
+    ctx.fillRect(cx - width / 2, cy - width / 2, width, width);
+  }
+
+  ctx.strokeStyle = style.marking;
   ctx.lineWidth = Math.max(1, 1.5 * zoom);
-  ctx.setLineDash([6 * zoom, 6 * zoom]);
+  ctx.setLineDash(style.speed > 1.5 ? [] : [6 * zoom, 6 * zoom]);
   ctx.beginPath();
 
   if (
@@ -349,6 +394,27 @@ function drawRoad(x, y) {
   }
 
   ctx.stroke();
+
+  if (style.capacity > 8) {
+    const horizontal = (mask & 10) !== 0 || (mask & 5) === 0 && roadRotation === 0;
+    const offset = width * 0.2;
+    ctx.lineWidth = Math.max(0.8, zoom);
+    ctx.setLineDash([4 * zoom, 5 * zoom]);
+    ctx.beginPath();
+    if (horizontal) {
+      ctx.moveTo(p.x, cy - offset);
+      ctx.lineTo(p.x + s, cy - offset);
+      ctx.moveTo(p.x, cy + offset);
+      ctx.lineTo(p.x + s, cy + offset);
+    } else {
+      ctx.moveTo(cx - offset, p.y);
+      ctx.lineTo(cx - offset, p.y + s);
+      ctx.moveTo(cx + offset, p.y);
+      ctx.lineTo(cx + offset, p.y + s);
+    }
+    ctx.stroke();
+  }
+
   ctx.setLineDash([]);
 }
 
@@ -1111,6 +1177,24 @@ function getRoads() {
     });
 }
 
+function calculateRoadNetworkStats() {
+  const stats = { local: 0, avenue: 0, highway: 0, intersections: 0 };
+  for (const [rawKey, tile] of Object.entries(grid)) {
+    if (tile.type !== "road") continue;
+    const [x, y] = rawKey.split(",").map(Number);
+    const roadType = ROAD_TYPES[tile.roadType] ? tile.roadType : "local";
+    stats[roadType]++;
+    const connections = [
+      isRoad(x, y - 1),
+      isRoad(x + 1, y),
+      isRoad(x, y + 1),
+      isRoad(x - 1, y)
+    ].filter(Boolean).length;
+    if (connections >= 3) stats.intersections++;
+  }
+  return stats;
+}
+
 function nearestRoad(x, y) {
   const roads = getRoads();
   if (!roads.length) return null;
@@ -1188,24 +1272,74 @@ function adjacentRoads(x, y) {
   ].filter(road => isRoad(road.x, road.y));
 }
 
+function roadConfig(tile) {
+  return ROAD_TYPES[tile?.roadType] || ROAD_TYPES.local;
+}
+
+function getRoadCapacity(tile) {
+  return roadConfig(tile).capacity;
+}
+
+function pushRouteNode(heap, node) {
+  heap.push(node);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (heap[parent].cost <= heap[index].cost) break;
+    [heap[parent], heap[index]] = [heap[index], heap[parent]];
+    index = parent;
+  }
+}
+
+function popRouteNode(heap) {
+  if (!heap.length) return null;
+  const first = heap[0];
+  const last = heap.pop();
+  if (heap.length) {
+    heap[0] = last;
+    let index = 0;
+    while (true) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      let smallest = index;
+      if (left < heap.length && heap[left].cost < heap[smallest].cost) smallest = left;
+      if (right < heap.length && heap[right].cost < heap[smallest].cost) smallest = right;
+      if (smallest === index) break;
+      [heap[index], heap[smallest]] = [heap[smallest], heap[index]];
+      index = smallest;
+    }
+  }
+  return first;
+}
+
 function roadPathBetweenBuildings(start, goal) {
   const starts = adjacentRoads(start.x, start.y);
   const goals = new Set(adjacentRoads(goal.x, goal.y).map(road => key(road.x, road.y)));
   if (!starts.length || !goals.size) return [];
 
-  const queue = [...starts];
-  const came = new Map(starts.map(road => [key(road.x, road.y), null]));
-  let head = 0;
+  const frontier = [];
+  const distances = new Map();
+  const came = new Map();
+  const points = new Map();
 
-  while (head < queue.length) {
-    const current = queue[head++];
+  for (const road of starts) {
+    const startKey = key(road.x, road.y);
+    distances.set(startKey, 0);
+    came.set(startKey, null);
+    points.set(startKey, road);
+    pushRouteNode(frontier, { ...road, cost: 0 });
+  }
+
+  while (frontier.length) {
+    const current = popRouteNode(frontier);
     const currentKey = key(current.x, current.y);
+    if (current.cost > distances.get(currentKey)) continue;
     if (goals.has(currentKey)) {
       const path = [];
-      let point = current;
-      while (point) {
-        path.unshift(point);
-        point = came.get(key(point.x, point.y));
+      let pointKey = currentKey;
+      while (pointKey) {
+        path.unshift(points.get(pointKey));
+        pointKey = came.get(pointKey);
       }
       return path;
     }
@@ -1219,9 +1353,13 @@ function roadPathBetweenBuildings(start, goal) {
 
     for (const neighbor of neighbors) {
       const neighborKey = key(neighbor.x, neighbor.y);
-      if (!isRoad(neighbor.x, neighbor.y) || came.has(neighborKey)) continue;
-      came.set(neighborKey, current);
-      queue.push(neighbor);
+      if (!isRoad(neighbor.x, neighbor.y)) continue;
+      const nextCost = current.cost + 1 / roadConfig(getTile(neighbor.x, neighbor.y)).speed;
+      if (nextCost >= (distances.get(neighborKey) ?? Infinity)) continue;
+      distances.set(neighborKey, nextCost);
+      came.set(neighborKey, currentKey);
+      points.set(neighborKey, neighbor);
+      pushRouteNode(frontier, { ...neighbor, cost: nextCost });
     }
   }
 
@@ -1318,11 +1456,13 @@ function updateVehicles(deltaSeconds) {
     if (!["toWork", "returning"].includes(vehicle.commuteState)) continue;
 
     const currentRoad = vehicle.route[Math.min(vehicle.index, vehicle.route.length - 1)];
+    const currentTile = getTile(currentRoad.x, currentRoad.y);
     const segmentLoad = traffic.loads.get(key(currentRoad.x, currentRoad.y)) || 1;
-    const segmentTraffic = (segmentLoad / ROAD_CAPACITY) * 100;
+    const capacity = getRoadCapacity(currentTile);
+    const segmentTraffic = (segmentLoad / capacity) * 100;
     const speedFactor = segmentTraffic > 100 ? 0.4 : segmentTraffic > 75 ? 0.6 : segmentTraffic > 50 ? 0.8 : 1;
 
-    vehicle.progress += vehicle.speed * speedFactor * deltaSeconds;
+    vehicle.progress += vehicle.speed * roadConfig(currentTile).speed * speedFactor * deltaSeconds;
 
     while (vehicle.progress >= 1) {
       vehicle.progress -= 1;
@@ -1358,17 +1498,19 @@ function getTrafficSnapshot() {
     loads.set(roadKey, (loads.get(roadKey) || 0) + 1);
   }
 
-  let totalLoad = 0;
-  let peakLoad = 0;
-  for (const load of loads.values()) {
-    totalLoad += load;
-    peakLoad = Math.max(peakLoad, load);
+  let totalPressure = 0;
+  let peakPressure = 0;
+
+  for (const [roadKey, load] of loads) {
+    const [x, y] = roadKey.split(",").map(Number);
+    const pressure = load / getRoadCapacity(getTile(x, y));
+    totalPressure += pressure;
+    peakPressure = Math.max(peakPressure, pressure);
   }
 
   const averagePressure = loads.size > 0
-    ? totalLoad / (loads.size * ROAD_CAPACITY)
+    ? totalPressure / loads.size
     : 0;
-  const peakPressure = peakLoad / ROAD_CAPACITY;
   const percent = loads.size > 0
     ? clamp(Math.round((averagePressure * 0.7 + peakPressure * 0.3) * 100), 0, 100)
     : activeVehicleCount() > 0 ? 100 : 0;
@@ -1413,7 +1555,9 @@ function calculateSatisfaction() {
 ========================================================= */
 
 function calculateRoadMaintenance() {
-  return countType("road") * ROAD_MAINTENANCE_PER_TILE;
+  return Object.values(grid)
+    .filter(tile => tile.type === "road")
+    .reduce((sum, tile) => sum + roadConfig(tile).maintenance, 0);
 }
 
 function calculateResidentTax() {
@@ -1568,6 +1712,26 @@ function buildAt(x, y, type, drag = false) {
   }
 
   const existing = getTile(x, y);
+  if (existing?.type === "road" && type === "road") {
+    if (existing.roadType === selectedRoadType) return;
+    const upgradeCost = Math.max(
+      0,
+      ROAD_TYPES[selectedRoadType].cost - roadConfig(existing).cost
+    );
+    if (money < upgradeCost) {
+      if (!drag) setMessage("Nicht genug Geld für diesen Straßenausbau.");
+      return;
+    }
+
+    existing.roadType = selectedRoadType;
+    money -= upgradeCost;
+    saveGame();
+    updateUI();
+    draw();
+    if (!drag) setMessage(`${ROAD_TYPES[selectedRoadType].label} eingestellt.`);
+    return;
+  }
+
   if (existing) return;
 
   if (isZoneTool(type)) {
@@ -1585,7 +1749,7 @@ function buildAt(x, y, type, drag = false) {
     return;
   }
 
-  const cost = COSTS[type];
+  const cost = type === "road" ? ROAD_TYPES[selectedRoadType].cost : COSTS[type];
   if (!Number.isFinite(cost)) return;
 
   if (money < cost) {
@@ -1595,7 +1759,8 @@ function buildAt(x, y, type, drag = false) {
 
   if (type === "road") {
     grid[key(x, y)] = {
-      type: "road"
+      type: "road",
+      roadType: selectedRoadType
     };
   } else {
     grid[key(x, y)] = {
@@ -1746,13 +1911,14 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.15.0",
+    version: "0.16.0",
     money,
     population,
     year,
     month,
     selectedTool,
     roadRotation,
+    selectedRoadType,
     zoom,
     offsetX,
     offsetY,
@@ -1792,6 +1958,9 @@ function normalizeLoadedGrid(rawGrid) {
     if (tile.type === "residential" && !Array.isArray(tile.households)) {
       tile.households = [];
     }
+    if (tile.type === "road" && !ROAD_TYPES[tile.roadType]) {
+      tile.roadType = "local";
+    }
   }
 
   return result;
@@ -1810,6 +1979,7 @@ function loadSlot(slot) {
     month = Number.isFinite(state.month) ? state.month : 1;
     selectedTool = state.selectedTool || "select";
     roadRotation = state.roadRotation || 0;
+    selectedRoadType = ROAD_TYPES[state.selectedRoadType] ? state.selectedRoadType : "local";
     zoom = Number.isFinite(state.zoom) ? state.zoom : 1;
     offsetX = Number.isFinite(state.offsetX) ? state.offsetX : 0;
     offsetY = Number.isFinite(state.offsetY) ? state.offsetY : 0;
@@ -1846,6 +2016,7 @@ function loadSlot(slot) {
 
     updateToolButtons();
     updateTimeButtons();
+    updateRoadTypeControl();
     updateTaxControls();
     updateUI();
     updateBankUI();
@@ -1958,6 +2129,7 @@ document.getElementById("newGame").addEventListener("click", () => {
   month = 1;
   selectedTool = "select";
   roadRotation = 0;
+  selectedRoadType = "local";
   zoom = 1;
   offsetX = 0;
   offsetY = 0;
@@ -1977,6 +2149,7 @@ document.getElementById("newGame").addEventListener("click", () => {
   saveGame(currentSlot);
   updateToolButtons();
   updateTimeButtons();
+  updateRoadTypeControl();
   updateTaxControls();
   updateUI();
   updateBankUI();
@@ -2013,6 +2186,11 @@ function updateUI() {
   els.commercial.textContent = countType("commercial");
   els.industrial.textContent = countType("industrial");
   els.parks.textContent = countType("park");
+  const roads = calculateRoadNetworkStats();
+  els.localRoads.textContent = roads.local;
+  els.avenueRoads.textContent = roads.avenue;
+  els.highwayRoads.textContent = roads.highway;
+  els.intersections.textContent = roads.intersections;
 
   els.residentialZones.textContent = countZone("zoneResidential");
   els.commercialZones.textContent = countZone("zoneCommercial");
@@ -2070,6 +2248,20 @@ function updateToolButtons() {
     );
   });
 }
+
+function updateRoadTypeControl() {
+  const road = ROAD_TYPES[selectedRoadType] || ROAD_TYPES.local;
+  els.roadTypeSelect.value = selectedRoadType;
+  els.roadCostLabel.textContent = `${road.cost.toLocaleString("de-DE")} €`;
+}
+
+els.roadTypeSelect.addEventListener("change", () => {
+  if (!ROAD_TYPES[els.roadTypeSelect.value]) return;
+  selectedRoadType = els.roadTypeSelect.value;
+  updateRoadTypeControl();
+  saveGame();
+  setMessage(`${ROAD_TYPES[selectedRoadType].label} ausgewählt.`);
+});
 
 document.querySelectorAll("[data-tool]").forEach(button => {
   button.addEventListener("click", () => {
@@ -2325,6 +2517,7 @@ updateSaveSlots();
 updateBankUI();
 updateUI();
 updateTaxControls();
+updateRoadTypeControl();
 resizeCanvas();
 updateTimeButtons();
 
