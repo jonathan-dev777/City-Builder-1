@@ -428,6 +428,8 @@ function drawBuilding(x, y, tile) {
 
   if (["residential", "commercial", "industrial"].includes(tile.type)) {
     const level = getBuildingLevel(tile);
+    const stage = clamp(Math.floor(level), 1, 3);
+    const stageProgress = clamp(Number(tile.growthProgress) || 0, 0, 100);
     const w = s * 0.74;
     const h = Math.max(2, s * 0.07);
 
@@ -438,12 +440,12 @@ function drawBuilding(x, y, tile) {
     ctx.fillRect(
       p.x + (s - w) / 2,
       p.y + s - h - 3,
-      w * Math.min(1, level / 3),
+      w * Math.min(1, (stage - 1 + stageProgress / 100) / 3),
       h
     );
 
     ctx.font = `${Math.max(7, s * 0.18)}px Arial`;
-    ctx.fillText(`L${Math.floor(level)}`, p.x + s - 7, p.y + 8);
+    ctx.fillText(`L${stage}`, p.x + s - 7, p.y + 8);
   }
 }
 
@@ -927,6 +929,7 @@ function tryDevelopZones() {
     grid[key(candidate.x, candidate.y)] = {
       type: buildingType,
       level: 1,
+      growthProgress: 0,
       zoneType: candidate.zoneType
     };
 
@@ -936,8 +939,9 @@ function tryDevelopZones() {
 
 function updateBuildings() {
   const demand = calculateDemand();
+  const infra = infrastructure();
 
-  for (const tile of Object.values(grid)) {
+  for (const [rawKey, tile] of Object.entries(grid)) {
     if (![
       "residential",
       "commercial",
@@ -946,15 +950,35 @@ function updateBuildings() {
       continue;
     }
 
-    const level = getBuildingLevel(tile);
-    const buildingDemand = demand[tile.type] || 0;
-    const chance = 0.05 + buildingDemand / 2500;
+    const rawLevel = getBuildingLevel(tile);
+    const level = clamp(Math.floor(rawLevel), 1, 3);
+    if (!Number.isFinite(tile.growthProgress)) {
+      tile.growthProgress = clamp((rawLevel - level) * 100, 0, 100);
+    }
+    tile.level = level;
 
-    if (
-      level < 3 &&
-      Math.random() < chance
-    ) {
-      tile.level = Math.min(3, level + 0.1);
+    if (level >= 3) {
+      tile.growthProgress = 0;
+      continue;
+    }
+
+    const buildingDemand = demand[tile.type] || 0;
+    const [x, y] = rawKey.split(",").map(Number);
+    const hasRoadAccess = hasAdjacentRoad(x, y);
+
+    if (!hasRoadAccess || !infra.powerOK || !infra.waterOK || buildingDemand < 25) {
+      tile.growthProgress = Math.max(0, tile.growthProgress - 8);
+      continue;
+    }
+
+    const growthChance = clamp(0.3 + buildingDemand / 120, 0.3, 0.95);
+    if (Math.random() < growthChance) {
+      tile.growthProgress += Math.max(4, (buildingDemand - 15) * 0.75);
+    }
+
+    if (tile.growthProgress >= 100) {
+      tile.level = level + 1;
+      tile.growthProgress = 0;
     }
   }
 }
@@ -1492,7 +1516,7 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.10.0",
+    version: "0.11.0",
     money,
     population,
     year,
@@ -1528,7 +1552,12 @@ function normalizeLoadedGrid(rawGrid) {
 
     // Alte v0.6-Zellen bleiben gültig.
     if (["residential", "commercial", "industrial"].includes(tile.type)) {
-      if (!tile.level) tile.level = 0.5;
+      const legacyLevel = Number.isFinite(tile.level) ? tile.level : 1;
+      tile.level = clamp(Math.floor(Math.max(1, legacyLevel)), 1, 3);
+      const legacyProgress = Number.isFinite(tile.growthProgress)
+        ? tile.growthProgress
+        : (legacyLevel - Math.floor(Math.max(1, legacyLevel))) * 100;
+      tile.growthProgress = clamp(legacyProgress, 0, 100);
     }
   }
 
