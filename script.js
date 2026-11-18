@@ -48,6 +48,14 @@ const MAX_VEHICLES = 500;
 // 1x = 20 reale Sekunden pro Spielmonat.
 const MONTH_SECONDS = 20;
 
+const EMPTY_MONTHLY_LEDGER = {
+  operating: 0,
+  residentTax: 0,
+  roads: 0,
+  loan: 0,
+  net: 0
+};
+
 const ZONE_TYPES = {
   residential: "zoneResidential",
   commercial: "zoneCommercial",
@@ -80,6 +88,7 @@ let vehicleSpawnTimer = 0;
 
 let grid = {};
 let loans = [];
+let monthlyLedger = { ...EMPTY_MONTHLY_LEDGER };
 
 let currentSlot = 1;
 let lastFrame = performance.now();
@@ -117,6 +126,11 @@ const els = {
 
   satisfactionCity: document.getElementById("satisfactionCity"),
   balance: document.getElementById("balance"),
+  ledgerOperating: document.getElementById("ledgerOperating"),
+  ledgerResidentTax: document.getElementById("ledgerResidentTax"),
+  ledgerRoads: document.getElementById("ledgerRoads"),
+  ledgerLoan: document.getElementById("ledgerLoan"),
+  ledgerNet: document.getElementById("ledgerNet"),
 
   demandResidential: document.getElementById("demandResidential"),
   demandCommercial: document.getElementById("demandCommercial"),
@@ -1279,6 +1293,19 @@ function advanceMonth() {
   tryDevelopZones();
 
   const payment = calculateLoanPayment();
+  const operating = calculateBaseBalance();
+  const residentTax = calculateResidentTax();
+  const roads = calculateRoadMaintenance();
+  const operatingBalance = operating + residentTax - roads;
+  const monthlyBalance = operatingBalance - payment;
+
+  monthlyLedger = {
+    operating,
+    residentTax,
+    roads,
+    loan: payment,
+    net: monthlyBalance
+  };
 
   for (let i = loans.length - 1; i >= 0; i--) {
     const loan = loans[i];
@@ -1300,9 +1327,6 @@ function advanceMonth() {
       loans.splice(i, 1);
     }
   }
-
-  const operatingBalance = calculateOperatingBalance();
-  const monthlyBalance = operatingBalance - payment;
 
   money += monthlyBalance;
 
@@ -1343,7 +1367,7 @@ function updateTimeButtons() {
 
 function setGameSpeed(speed) {
   const numericSpeed = Number(speed);
-  if (![1, 2, 4, 8].includes(numericSpeed)) return;
+  if (![1, 2, 4].includes(numericSpeed)) return;
 
   timeScale = numericSpeed;
   previousTimeScale = numericSpeed;
@@ -1385,7 +1409,7 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.7",
+    version: "0.8.0",
     money,
     population,
     year,
@@ -1396,7 +1420,8 @@ function getGameState() {
     offsetX,
     offsetY,
     grid,
-    loans
+    loans,
+    monthlyLedger
   };
 }
 
@@ -1444,6 +1469,10 @@ function loadSlot(slot) {
     offsetY = Number.isFinite(state.offsetY) ? state.offsetY : 0;
     grid = normalizeLoadedGrid(state.grid);
     loans = Array.isArray(state.loans) ? state.loans : [];
+    monthlyLedger = {
+      ...EMPTY_MONTHLY_LEDGER,
+      ...(state.monthlyLedger || {})
+    };
 
     currentSlot = slot;
     vehicles = [];
@@ -1573,6 +1602,7 @@ document.getElementById("newGame").addEventListener("click", () => {
   vehicleSpawnTimer = 0;
   grid = {};
   loans = [];
+  monthlyLedger = { ...EMPTY_MONTHLY_LEDGER };
   gameTimeAccumulator = 0;
   timeScale = 1;
   previousTimeScale = 1;
@@ -1629,6 +1659,12 @@ function updateUI() {
   els.traffic.textContent = `${traffic}%`;
   els.satisfactionCity.textContent = `${satisfaction}%`;
   els.balance.textContent = `${balance >= 0 ? "+" : ""}${Math.round(balance).toLocaleString("de-DE")} €`;
+
+  els.ledgerOperating.textContent = formatEuro(monthlyLedger.operating);
+  els.ledgerResidentTax.textContent = formatEuro(monthlyLedger.residentTax);
+  els.ledgerRoads.textContent = `−${formatEuro(monthlyLedger.roads)}`;
+  els.ledgerLoan.textContent = `−${formatEuro(monthlyLedger.loan)}`;
+  els.ledgerNet.textContent = `${monthlyLedger.net >= 0 ? "+" : ""}${formatEuro(monthlyLedger.net)}`;
 
   els.debt.textContent = formatEuro(calculateDebt());
   els.loanPayment.textContent = formatEuro(calculateLoanPayment());
