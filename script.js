@@ -114,6 +114,7 @@ const els = {
   date: document.getElementById("date"),
 
   housing: document.getElementById("housing"),
+  households: document.getElementById("households"),
   commercial: document.getElementById("commercial"),
   industrial: document.getElementById("industrial"),
   parks: document.getElementById("parks"),
@@ -595,8 +596,7 @@ function isBuildingTile(tile) {
 }
 
 function calculatePopulation() {
-  const infra = infrastructure();
-  let capacity = 0;
+  let residents = 0;
 
   for (const [rawKey, tile] of Object.entries(grid)) {
     if (tile.type !== "residential") continue;
@@ -604,15 +604,98 @@ function calculatePopulation() {
     const [x, y] = rawKey.split(",").map(Number);
 
     if (hasAdjacentRoad(x, y)) {
-      capacity += CAPACITY.residential * getBuildingLevel(tile);
+      const households = Array.isArray(tile.households) ? tile.households : [];
+      residents += households.reduce((sum, size) => sum + Math.max(0, Number(size) || 0), 0);
     }
   }
 
-  const infrastructureFactor =
-    infra.powerOK && infra.waterOK ? 1 : 0.25;
-
-  population = Math.floor(capacity * infrastructureFactor);
+  population = Math.floor(residents);
   return population;
+}
+
+function householdPopulation(tile) {
+  if (!Array.isArray(tile.households)) return 0;
+  return tile.households.reduce((sum, size) => sum + Math.max(0, Number(size) || 0), 0);
+}
+
+function countHouseholds() {
+  return Object.values(grid)
+    .filter(tile => tile.type === "residential")
+    .reduce((sum, tile) => sum + (Array.isArray(tile.households) ? tile.households.length : 0), 0);
+}
+
+function householdSizeFor(x, y, index) {
+  const sizes = [1, 2, 3, 4, 5];
+  const hash = Math.abs(x * 31 + y * 17 + index * 13);
+  return sizes[hash % sizes.length];
+}
+
+function seedLegacyHouseholds(targetPopulation) {
+  const homes = Object.entries(grid)
+    .filter(([, tile]) => tile.type === "residential")
+    .map(([rawKey, tile]) => {
+      const [x, y] = rawKey.split(",").map(Number);
+      return { x, y, tile };
+    })
+    .filter(home => hasAdjacentRoad(home.x, home.y));
+
+  let remaining = Math.max(0, Math.floor(targetPopulation));
+  while (remaining > 0) {
+    let changed = false;
+    for (const home of homes) {
+      const households = Array.isArray(home.tile.households) ? home.tile.households : [];
+      home.tile.households = households;
+      const capacity = Math.floor(CAPACITY.residential * getBuildingLevel(home.tile));
+      const occupied = householdPopulation(home.tile);
+      if (occupied >= capacity || remaining <= 0) continue;
+
+      const size = Math.min(
+        householdSizeFor(home.x, home.y, households.length),
+        capacity - occupied,
+        remaining
+      );
+      households.push(size);
+      remaining -= size;
+      changed = true;
+    }
+    if (!changed) break;
+  }
+}
+
+function updateHouseholds() {
+  const demand = calculateDemand();
+  const infra = infrastructure();
+  const occupancy = 0.35 + demand.residential * 0.006;
+  const serviceFactor = infra.powerOK && infra.waterOK ? 1 : 0.25;
+
+  for (const [rawKey, tile] of Object.entries(grid)) {
+    if (tile.type !== "residential") continue;
+
+    const [x, y] = rawKey.split(",").map(Number);
+    const households = Array.isArray(tile.households) ? tile.households : [];
+    tile.households = households;
+    const capacity = Math.floor(CAPACITY.residential * getBuildingLevel(tile));
+    const target = hasAdjacentRoad(x, y)
+      ? Math.floor(capacity * occupancy * serviceFactor)
+      : 0;
+
+    while (householdPopulation(tile) > target && households.length) {
+      households.pop();
+    }
+
+    while (householdPopulation(tile) < target) {
+      const occupied = householdPopulation(tile);
+      const size = Math.min(
+        householdSizeFor(x, y, households.length),
+        target - occupied,
+        capacity - occupied
+      );
+      if (size <= 0) break;
+      households.push(size);
+    }
+  }
+
+  calculatePopulation();
 }
 
 function calculateJobs() {
@@ -926,12 +1009,14 @@ function tryDevelopZones() {
     const buildingType = buildingTypeForZone(candidate.zoneType);
     if (!buildingType) continue;
 
-    grid[key(candidate.x, candidate.y)] = {
+    const building = {
       type: buildingType,
       level: 1,
       growthProgress: 0,
       zoneType: candidate.zoneType
     };
+    if (buildingType === "residential") building.households = [];
+    grid[key(candidate.x, candidate.y)] = building;
 
     developments++;
   }
@@ -1315,6 +1400,12 @@ function buildAt(x, y, type, drag = false) {
       return;
     }
 
+    if (tile.type === "residential") {
+      const households = Array.isArray(tile.households) ? tile.households.length : 0;
+      setMessage(`Wohnhaus auf ${x}/${y}: ${householdPopulation(tile)} Bewohner in ${households} Haushalten.`);
+      return;
+    }
+
     setMessage(`${tile.type} auf ${x}/${y}`);
     return;
   }
@@ -1397,6 +1488,7 @@ function isZoneTool(type) {
 function advanceMonth() {
   updateBuildings();
   tryDevelopZones();
+  updateHouseholds();
 
   const payment = calculateLoanPayment();
   const operating = calculateBaseBalance();
@@ -1516,7 +1608,7 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.11.0",
+    version: "0.12.0",
     money,
     population,
     year,
@@ -1559,6 +1651,9 @@ function normalizeLoadedGrid(rawGrid) {
         : (legacyLevel - Math.floor(Math.max(1, legacyLevel))) * 100;
       tile.growthProgress = clamp(legacyProgress, 0, 100);
     }
+    if (tile.type === "residential" && !Array.isArray(tile.households)) {
+      tile.households = [];
+    }
   }
 
   return result;
@@ -1580,7 +1675,11 @@ function loadSlot(slot) {
     zoom = Number.isFinite(state.zoom) ? state.zoom : 1;
     offsetX = Number.isFinite(state.offsetX) ? state.offsetX : 0;
     offsetY = Number.isFinite(state.offsetY) ? state.offsetY : 0;
+    const hadHouseholdData = Object.values(state.grid || {}).some(
+      tile => tile?.type === "residential" && Array.isArray(tile.households)
+    );
     grid = normalizeLoadedGrid(state.grid);
+    if (!hadHouseholdData) seedLegacyHouseholds(population);
     loans = Array.isArray(state.loans) ? state.loans : [];
     monthlyLedger = {
       ...EMPTY_MONTHLY_LEDGER,
@@ -1772,6 +1871,7 @@ function updateUI() {
   els.date.textContent = `Jahr ${year} – Monat ${month}`;
 
   els.housing.textContent = countType("residential");
+  els.households.textContent = countHouseholds().toLocaleString("de-DE");
   els.commercial.textContent = countType("commercial");
   els.industrial.textContent = countType("industrial");
   els.parks.textContent = countType("park");
