@@ -42,7 +42,7 @@ const BASE_EXPENSE = {
 const ROAD_MAINTENANCE_PER_TILE = 0.5;
 
 const ROAD_CAPACITY = 8;
-const MAX_VEHICLES = 500;
+const MAX_VEHICLES = 750;
 
 // 1x = 20 reale Sekunden pro Spielmonat.
 const MONTH_SECONDS = 20;
@@ -1140,8 +1140,9 @@ function roadPath(start, goal) {
 
   came.set(startKey, null);
 
-  while (queue.length) {
-    const current = queue.shift();
+  let head = 0;
+  while (head < queue.length) {
+    const current = queue[head++];
     const currentKey = key(current.x, current.y);
 
     if (currentKey === goalKey) {
@@ -1170,6 +1171,55 @@ function roadPath(start, goal) {
         continue;
       }
 
+      came.set(neighborKey, current);
+      queue.push(neighbor);
+    }
+  }
+
+  return [];
+}
+
+function adjacentRoads(x, y) {
+  return [
+    { x, y: y - 1 },
+    { x: x + 1, y },
+    { x, y: y + 1 },
+    { x: x - 1, y }
+  ].filter(road => isRoad(road.x, road.y));
+}
+
+function roadPathBetweenBuildings(start, goal) {
+  const starts = adjacentRoads(start.x, start.y);
+  const goals = new Set(adjacentRoads(goal.x, goal.y).map(road => key(road.x, road.y)));
+  if (!starts.length || !goals.size) return [];
+
+  const queue = [...starts];
+  const came = new Map(starts.map(road => [key(road.x, road.y), null]));
+  let head = 0;
+
+  while (head < queue.length) {
+    const current = queue[head++];
+    const currentKey = key(current.x, current.y);
+    if (goals.has(currentKey)) {
+      const path = [];
+      let point = current;
+      while (point) {
+        path.unshift(point);
+        point = came.get(key(point.x, point.y));
+      }
+      return path;
+    }
+
+    const neighbors = [
+      { x: current.x + 1, y: current.y },
+      { x: current.x - 1, y: current.y },
+      { x: current.x, y: current.y + 1 },
+      { x: current.x, y: current.y - 1 }
+    ];
+
+    for (const neighbor of neighbors) {
+      const neighborKey = key(neighbor.x, neighbor.y);
+      if (!isRoad(neighbor.x, neighbor.y) || came.has(neighborKey)) continue;
       came.set(neighborKey, current);
       queue.push(neighbor);
     }
@@ -1209,9 +1259,7 @@ function createVehicle() {
     randomBuilding("industrial", tile => tile.employees > 0);
   if (!work) return;
 
-  const homeRoad = nearestRoad(home.x, home.y);
-  const workRoad = nearestRoad(work.x, work.y);
-  const outbound = roadPath(homeRoad, workRoad);
+  const outbound = roadPathBetweenBuildings(home, work);
 
   if (outbound.length < 2) return false;
 
@@ -1232,7 +1280,7 @@ function createVehicle() {
 
 function updateVehicles(deltaSeconds) {
   const workers = calculateEmployment().employed;
-  const desiredVehicles = clamp(Math.floor(workers * 0.55), 0, MAX_VEHICLES);
+  const desiredVehicles = clamp(Math.floor(workers * 0.65), 0, MAX_VEHICLES);
   const phase = clamp(gameTimeAccumulator / MONTH_SECONDS, 0, 1);
   const morning = phase < 0.25;
 
@@ -1241,8 +1289,8 @@ function updateVehicles(deltaSeconds) {
   if (morning) {
     vehicleSpawnTimer += deltaSeconds;
     let attempts = 0;
-    while (vehicles.length < desiredVehicles && vehicleSpawnTimer >= 0.12 && attempts < 50) {
-      vehicleSpawnTimer -= 0.12;
+    while (vehicles.length < desiredVehicles && vehicleSpawnTimer >= 0.04 && attempts < 50) {
+      vehicleSpawnTimer -= 0.04;
       attempts++;
       if (!createVehicle() && vehicleSpawnTimer > 1) vehicleSpawnTimer = 0;
     }
@@ -1250,6 +1298,7 @@ function updateVehicles(deltaSeconds) {
     vehicleSpawnTimer = 0;
   }
 
+  const traffic = getTrafficSnapshot();
   for (let i = vehicles.length - 1; i >= 0; i--) {
     const vehicle = vehicles[i];
     if (vehicle.commuteState === "atHome" && morning) {
@@ -1268,8 +1317,10 @@ function updateVehicles(deltaSeconds) {
 
     if (!["toWork", "returning"].includes(vehicle.commuteState)) continue;
 
-    const traffic = calculateTraffic();
-    const speedFactor = traffic > 80 ? 0.45 : traffic > 60 ? 0.7 : 1;
+    const currentRoad = vehicle.route[Math.min(vehicle.index, vehicle.route.length - 1)];
+    const segmentLoad = traffic.loads.get(key(currentRoad.x, currentRoad.y)) || 1;
+    const segmentTraffic = (segmentLoad / ROAD_CAPACITY) * 100;
+    const speedFactor = segmentTraffic > 100 ? 0.4 : segmentTraffic > 75 ? 0.6 : segmentTraffic > 50 ? 0.8 : 1;
 
     vehicle.progress += vehicle.speed * speedFactor * deltaSeconds;
 
@@ -1296,20 +1347,37 @@ function updateVehicles(deltaSeconds) {
   }
 }
 
-function calculateTraffic() {
-  const roads = countType("road");
-  const trafficCapacity = roads * ROAD_CAPACITY;
-  const activeVehicles = activeVehicleCount();
+function getTrafficSnapshot() {
+  const loads = new Map();
 
-  if (trafficCapacity <= 0) {
-    return activeVehicles > 0 ? 100 : 0;
+  for (const vehicle of vehicles) {
+    if (!["toWork", "returning"].includes(vehicle.commuteState)) continue;
+    const road = vehicle.route?.[Math.min(vehicle.index, vehicle.route.length - 1)];
+    if (!road) continue;
+    const roadKey = key(road.x, road.y);
+    loads.set(roadKey, (loads.get(roadKey) || 0) + 1);
   }
 
-  return clamp(
-    Math.round((activeVehicles / trafficCapacity) * 100),
-    0,
-    100
-  );
+  let totalLoad = 0;
+  let peakLoad = 0;
+  for (const load of loads.values()) {
+    totalLoad += load;
+    peakLoad = Math.max(peakLoad, load);
+  }
+
+  const averagePressure = loads.size > 0
+    ? totalLoad / (loads.size * ROAD_CAPACITY)
+    : 0;
+  const peakPressure = peakLoad / ROAD_CAPACITY;
+  const percent = loads.size > 0
+    ? clamp(Math.round((averagePressure * 0.7 + peakPressure * 0.3) * 100), 0, 100)
+    : activeVehicleCount() > 0 ? 100 : 0;
+
+  return { loads, percent };
+}
+
+function calculateTraffic() {
+  return getTrafficSnapshot().percent;
 }
 
 
@@ -1678,7 +1746,7 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.14.0",
+    version: "0.15.0",
     money,
     population,
     year,
