@@ -166,6 +166,12 @@ main {
   font-size: 11px;
 }
 
+.panel-note {
+  margin-top: 4px;
+  color: #9ca3af;
+  font-size: 10px;
+}
+
 .panel-button,
 .danger-button {
   width: 100%;
