@@ -142,6 +142,27 @@ main {
   color: #d1d5db;
 }
 
+.road-setting {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  color: #d1d5db;
+  background: #202b3a;
+  font-size: 11px;
+}
+
+.road-setting select {
+  width: 100%;
+  padding: 6px;
+  border: 1px solid #4b5563;
+  border-radius: 6px;
+  color: #fff;
+  background: #111827;
+  font: inherit;
+}
+
 .rotate-road {
   color: #bfdbfe;
 }

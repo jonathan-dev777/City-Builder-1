@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>City Builder 1 — v0.15.0</title>
+  <title>City Builder 1 — v0.16.0</title>
   <link rel="stylesheet" href="style.css">
 </head>
 
@@ -14,7 +14,7 @@
   <div>
     <h1>
       City Builder 1
-      <span>v0.15.0</span>
+      <span>v0.16.0</span>
     </h1>
 
     <div class="subtitle">
@@ -74,6 +74,15 @@
       <button data-tool="road" class="tool" type="button">
         🛣️ Straße <small>50 €</small>
       </button>
+
+      <label class="road-setting" for="roadTypeSelect">
+        Straßentyp
+        <select id="roadTypeSelect" aria-label="Straßentyp auswählen">
+          <option value="local">Nebenstraße · 50 €</option>
+          <option value="avenue">Hauptstraße · 150 €</option>
+          <option value="highway">Schnellstraße · 350 €</option>
+        </select>
+      </label>
 
       <button data-tool="power" class="tool" type="button">
         ⚡ Kraftwerk <small>5.000 €</small>
@@ -139,6 +148,11 @@
         <span>🌳 Parks</span>
         <strong id="parks">0</strong>
       </div>
+
+      <div class="row"><span>🛣️ Nebenstraßen</span><strong id="localRoads">0</strong></div>
+      <div class="row"><span>🚦 Hauptstraßen</span><strong id="avenueRoads">0</strong></div>
+      <div class="row"><span>🏎️ Schnellstraßen</span><strong id="highwayRoads">0</strong></div>
+      <div class="row"><span>✚ Kreuzungen</span><strong id="intersections">0</strong></div>
 
       <div class="row">
         <span>🟩 Wohnzonen</span>
