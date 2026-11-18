@@ -820,32 +820,52 @@ function updateBankUI() {
 ========================================================= */
 
 function calculateDemand() {
-  const housing = countType("residential");
-  const commercial = countType("commercial");
-  const industrial = countType("industrial");
+  calculatePopulation();
   const jobs = calculateJobs();
-  const unemployed = Math.max(0, population - jobs);
+  const unemploymentRate = population > 0
+    ? clamp((population - Math.min(population, jobs)) / population, 0, 1)
+    : 0;
 
   const residentialCapacity = Object.values(grid)
     .filter(tile => tile.type === "residential")
     .reduce((sum, tile) => sum + CAPACITY.residential * getBuildingLevel(tile), 0);
 
-  const freeHousing = Math.max(0, residentialCapacity - population);
+  const vacancyRate = residentialCapacity > 0
+    ? clamp((residentialCapacity - population) / residentialCapacity, 0, 1)
+    : 0;
+  const commercialSupply = Object.values(grid)
+    .filter(tile => tile.type === "commercial")
+    .reduce((sum, tile) => sum + getBuildingLevel(tile), 0);
+  const industrialSupply = Object.values(grid)
+    .filter(tile => tile.type === "industrial")
+    .reduce((sum, tile) => sum + getBuildingLevel(tile), 0);
+  const infra = infrastructure();
+  const utilityPenalty = (infra.powerOK ? 0 : 12) + (infra.waterOK ? 0 : 12);
+  const satisfaction = calculateSatisfaction();
 
   const residentialDemand = clamp(
-    Math.round(55 + (jobs - population) * 1.5 - housing * 1.5 - freeHousing * 0.4),
+    Math.round(
+      48 + clamp(((jobs - population) / Math.max(20, population)) * 55, -25, 25) -
+      vacancyRate * 42 + (satisfaction - 65) * 0.35 - utilityPenalty
+    ),
     0,
     100
   );
 
   const commercialDemand = clamp(
-    Math.round(35 + population * 0.9 - commercial * 5 - unemployed * 0.15),
+    Math.round(
+      40 + Math.min(30, population / 7) - commercialSupply * 8 -
+      unemploymentRate * 24 + Math.min(8, jobs / 30) - utilityPenalty * 0.5
+    ),
     0,
     100
   );
 
   const industrialDemand = clamp(
-    Math.round(30 + population * 0.7 - industrial * 6 + unemployed * 0.25),
+    Math.round(
+      34 + Math.min(24, population / 10) - industrialSupply * 7 +
+      unemploymentRate * 42 - Math.max(0, calculateTraffic() - 60) * 0.15 - utilityPenalty * 0.5
+    ),
     0,
     100
   );
@@ -1472,7 +1492,7 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.9.0",
+    version: "0.10.0",
     money,
     population,
     year,
