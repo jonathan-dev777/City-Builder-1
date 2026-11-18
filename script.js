@@ -127,6 +127,7 @@ const els = {
   water: document.getElementById("water"),
 
   jobs: document.getElementById("jobs"),
+  employed: document.getElementById("employed"),
   unemployed: document.getElementById("unemployed"),
 
   vehicleCount: document.getElementById("vehicleCount"),
@@ -709,8 +710,35 @@ function calculateJobs() {
   return Math.floor(result);
 }
 
+function calculateEmployment() {
+  calculatePopulation();
+  let availableWorkers = population;
+  let jobs = 0;
+  let employed = 0;
+
+  const businesses = Object.entries(grid)
+    .filter(([, tile]) => JOBS[tile.type])
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  for (const [, tile] of businesses) {
+    const positions = Math.floor(JOBS[tile.type] * getBuildingLevel(tile));
+    const staff = Math.min(positions, availableWorkers);
+    tile.employees = staff;
+    jobs += positions;
+    employed += staff;
+    availableWorkers -= staff;
+  }
+
+  return {
+    jobs,
+    employed,
+    unemployed: Math.max(0, population - employed),
+    vacancies: Math.max(0, jobs - employed)
+  };
+}
+
 function calculateUnemployed() {
-  return Math.max(0, population - calculateJobs());
+  return calculateEmployment().unemployed;
 }
 
 
@@ -1199,7 +1227,7 @@ function createVehicle() {
 function updateVehicles(deltaSeconds) {
   vehicleSpawnTimer += deltaSeconds;
 
-  const workers = Math.min(population, calculateJobs());
+  const workers = calculateEmployment().employed;
   const desiredVehicles = clamp(Math.floor(workers * 0.55), 0, MAX_VEHICLES);
 
   // Bei höherer Geschwindigkeit entstehen Fahrzeuge schneller.
@@ -1341,19 +1369,23 @@ for (const [input, rate, max] of [
 }
 
 function calculateBaseBalance() {
+  calculateEmployment();
   let income = 0;
   let expense = 0;
 
   for (const tile of Object.values(grid)) {
     const type = tile.type;
     const level = getBuildingLevel(tile);
+    const staffing = JOBS[type]
+      ? clamp((tile.employees || 0) / Math.max(1, JOBS[type] * level), 0, 1)
+      : 1;
 
     if (BASE_INCOME[type]) {
-      income += BASE_INCOME[type] * level;
+      income += BASE_INCOME[type] * level * staffing;
     }
 
     if (BASE_EXPENSE[type]) {
-      expense += BASE_EXPENSE[type] * level;
+      expense += BASE_EXPENSE[type] * level * (JOBS[type] ? 0.5 + staffing * 0.5 : 1);
     }
   }
 
@@ -1403,6 +1435,12 @@ function buildAt(x, y, type, drag = false) {
     if (tile.type === "residential") {
       const households = Array.isArray(tile.households) ? tile.households.length : 0;
       setMessage(`Wohnhaus auf ${x}/${y}: ${householdPopulation(tile)} Bewohner in ${households} Haushalten.`);
+      return;
+    }
+
+    if (JOBS[tile.type]) {
+      const capacity = Math.floor(JOBS[tile.type] * getBuildingLevel(tile));
+      setMessage(`${tile.type} auf ${x}/${y}: ${tile.employees || 0} von ${capacity} Stellen besetzt.`);
       return;
     }
 
@@ -1489,6 +1527,7 @@ function advanceMonth() {
   updateBuildings();
   tryDevelopZones();
   updateHouseholds();
+  calculateEmployment();
 
   const payment = calculateLoanPayment();
   const operating = calculateBaseBalance();
@@ -1608,7 +1647,7 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.12.0",
+    version: "0.13.0",
     money,
     population,
     year,
@@ -1855,8 +1894,8 @@ document.getElementById("newGame").addEventListener("click", () => {
 function updateUI() {
   calculatePopulation();
 
-  const jobs = calculateJobs();
-  const unemployed = Math.max(0, population - jobs);
+  const employment = calculateEmployment();
+  const { jobs, employed, unemployed } = employment;
   const infra = infrastructure();
   const traffic = calculateTraffic();
   const satisfaction = calculateSatisfaction();
@@ -1883,6 +1922,7 @@ function updateUI() {
   els.power.textContent = `${Math.floor(infra.powerDemand)} / ${infra.powerCapacity}`;
   els.water.textContent = `${Math.floor(infra.waterDemand)} / ${infra.waterCapacity}`;
   els.jobs.textContent = jobs;
+  els.employed.textContent = employed;
   els.unemployed.textContent = unemployed;
   els.vehicleCount.textContent = vehicles.length;
   els.traffic.textContent = `${traffic}%`;
