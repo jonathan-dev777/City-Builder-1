@@ -39,7 +39,6 @@ const BASE_EXPENSE = {
   industrial: 10
 };
 
-const RESIDENT_TAX_PER_MONTH = 10;
 const ROAD_MAINTENANCE_PER_TILE = 0.5;
 
 const ROAD_CAPACITY = 8;
@@ -51,9 +50,16 @@ const MONTH_SECONDS = 20;
 const EMPTY_MONTHLY_LEDGER = {
   operating: 0,
   residentTax: 0,
+  businessTax: 0,
   roads: 0,
   loan: 0,
   net: 0
+};
+
+const DEFAULT_TAX_RATES = {
+  residential: 10,
+  commercial: 10,
+  industrial: 10
 };
 
 const ZONE_TYPES = {
@@ -89,6 +95,7 @@ let vehicleSpawnTimer = 0;
 let grid = {};
 let loans = [];
 let monthlyLedger = { ...EMPTY_MONTHLY_LEDGER };
+let taxRates = { ...DEFAULT_TAX_RATES };
 
 let currentSlot = 1;
 let lastFrame = performance.now();
@@ -128,9 +135,17 @@ const els = {
   balance: document.getElementById("balance"),
   ledgerOperating: document.getElementById("ledgerOperating"),
   ledgerResidentTax: document.getElementById("ledgerResidentTax"),
+  ledgerBusinessTax: document.getElementById("ledgerBusinessTax"),
   ledgerRoads: document.getElementById("ledgerRoads"),
   ledgerLoan: document.getElementById("ledgerLoan"),
   ledgerNet: document.getElementById("ledgerNet"),
+  taxResidential: document.getElementById("taxResidential"),
+  taxResidentialValue: document.getElementById("taxResidentialValue"),
+  taxCommercial: document.getElementById("taxCommercial"),
+  taxCommercialValue: document.getElementById("taxCommercialValue"),
+  taxIndustrial: document.getElementById("taxIndustrial"),
+  taxIndustrialValue: document.getElementById("taxIndustrialValue"),
+  taxRevenue: document.getElementById("taxRevenue"),
 
   demandResidential: document.getElementById("demandResidential"),
   demandCommercial: document.getElementById("demandCommercial"),
@@ -1147,7 +1162,53 @@ function calculateRoadMaintenance() {
 
 function calculateResidentTax() {
   calculatePopulation();
-  return population * RESIDENT_TAX_PER_MONTH;
+  return population * taxRates.residential;
+}
+
+function calculateTaxRevenue() {
+  calculatePopulation();
+  const revenue = {
+    residential: population * taxRates.residential,
+    commercial: 0,
+    industrial: 0
+  };
+
+  for (const tile of Object.values(grid)) {
+    const level = getBuildingLevel(tile);
+    if (tile.type === "commercial") {
+      revenue.commercial += 50 * level * taxRates.commercial / 100;
+    }
+    if (tile.type === "industrial") {
+      revenue.industrial += 80 * level * taxRates.industrial / 100;
+    }
+  }
+
+  revenue.total = revenue.residential + revenue.commercial + revenue.industrial;
+  revenue.business = revenue.commercial + revenue.industrial;
+  return revenue;
+}
+
+function updateTaxControls() {
+  els.taxResidential.value = taxRates.residential;
+  els.taxResidentialValue.textContent = `${taxRates.residential} €`;
+  els.taxCommercial.value = taxRates.commercial;
+  els.taxCommercialValue.textContent = `${taxRates.commercial} %`;
+  els.taxIndustrial.value = taxRates.industrial;
+  els.taxIndustrialValue.textContent = `${taxRates.industrial} %`;
+}
+
+for (const [input, rate, max] of [
+  [els.taxResidential, "residential", 20],
+  [els.taxCommercial, "commercial", 25],
+  [els.taxIndustrial, "industrial", 25]
+]) {
+  input.addEventListener("input", () => {
+    taxRates[rate] = clamp(Number(input.value), 0, max);
+    updateTaxControls();
+    updateUI();
+  });
+
+  input.addEventListener("change", () => saveGame());
 }
 
 function calculateBaseBalance() {
@@ -1171,9 +1232,10 @@ function calculateBaseBalance() {
 }
 
 function calculateOperatingBalance() {
+  const taxes = calculateTaxRevenue();
   return (
     calculateBaseBalance() +
-    calculateResidentTax() -
+    taxes.total -
     calculateRoadMaintenance()
   );
 }
@@ -1294,14 +1356,15 @@ function advanceMonth() {
 
   const payment = calculateLoanPayment();
   const operating = calculateBaseBalance();
-  const residentTax = calculateResidentTax();
+  const taxes = calculateTaxRevenue();
   const roads = calculateRoadMaintenance();
-  const operatingBalance = operating + residentTax - roads;
+  const operatingBalance = operating + taxes.total - roads;
   const monthlyBalance = operatingBalance - payment;
 
   monthlyLedger = {
     operating,
-    residentTax,
+    residentTax: taxes.residential,
+    businessTax: taxes.business,
     roads,
     loan: payment,
     net: monthlyBalance
@@ -1409,7 +1472,7 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.8.0",
+    version: "0.9.0",
     money,
     population,
     year,
@@ -1421,7 +1484,8 @@ function getGameState() {
     offsetY,
     grid,
     loans,
-    monthlyLedger
+    monthlyLedger,
+    taxRates
   };
 }
 
@@ -1473,6 +1537,18 @@ function loadSlot(slot) {
       ...EMPTY_MONTHLY_LEDGER,
       ...(state.monthlyLedger || {})
     };
+    for (const field of Object.keys(EMPTY_MONTHLY_LEDGER)) {
+      if (!Number.isFinite(monthlyLedger[field])) monthlyLedger[field] = 0;
+    }
+    const savedTaxRates = state.taxRates || {};
+    const residentialTax = Number(savedTaxRates.residential ?? DEFAULT_TAX_RATES.residential);
+    const commercialTax = Number(savedTaxRates.commercial ?? DEFAULT_TAX_RATES.commercial);
+    const industrialTax = Number(savedTaxRates.industrial ?? DEFAULT_TAX_RATES.industrial);
+    taxRates = {
+      residential: clamp(Number.isFinite(residentialTax) ? residentialTax : DEFAULT_TAX_RATES.residential, 0, 20),
+      commercial: clamp(Number.isFinite(commercialTax) ? commercialTax : DEFAULT_TAX_RATES.commercial, 0, 25),
+      industrial: clamp(Number.isFinite(industrialTax) ? industrialTax : DEFAULT_TAX_RATES.industrial, 0, 25)
+    };
 
     currentSlot = slot;
     vehicles = [];
@@ -1484,6 +1560,7 @@ function loadSlot(slot) {
 
     updateToolButtons();
     updateTimeButtons();
+    updateTaxControls();
     updateUI();
     updateBankUI();
     draw();
@@ -1603,6 +1680,7 @@ document.getElementById("newGame").addEventListener("click", () => {
   grid = {};
   loans = [];
   monthlyLedger = { ...EMPTY_MONTHLY_LEDGER };
+  taxRates = { ...DEFAULT_TAX_RATES };
   gameTimeAccumulator = 0;
   timeScale = 1;
   previousTimeScale = 1;
@@ -1613,6 +1691,7 @@ document.getElementById("newGame").addEventListener("click", () => {
   saveGame(currentSlot);
   updateToolButtons();
   updateTimeButtons();
+  updateTaxControls();
   updateUI();
   updateBankUI();
   draw();
@@ -1635,6 +1714,7 @@ function updateUI() {
   const satisfaction = calculateSatisfaction();
   const balance = calculateBalance();
   const demand = calculateDemand();
+  const taxes = calculateTaxRevenue();
 
   els.money.textContent = formatEuro(money);
   els.population.textContent = population.toLocaleString("de-DE");
@@ -1662,9 +1742,11 @@ function updateUI() {
 
   els.ledgerOperating.textContent = formatEuro(monthlyLedger.operating);
   els.ledgerResidentTax.textContent = formatEuro(monthlyLedger.residentTax);
+  els.ledgerBusinessTax.textContent = formatEuro(monthlyLedger.businessTax);
   els.ledgerRoads.textContent = `−${formatEuro(monthlyLedger.roads)}`;
   els.ledgerLoan.textContent = `−${formatEuro(monthlyLedger.loan)}`;
   els.ledgerNet.textContent = `${monthlyLedger.net >= 0 ? "+" : ""}${formatEuro(monthlyLedger.net)}`;
+  els.taxRevenue.textContent = formatEuro(taxes.total);
 
   els.debt.textContent = formatEuro(calculateDebt());
   els.loanPayment.textContent = formatEuro(calculateLoanPayment());
@@ -1954,6 +2036,7 @@ if (!localStorage.getItem(getSaveKey(1))) {
 updateSaveSlots();
 updateBankUI();
 updateUI();
+updateTaxControls();
 resizeCanvas();
 updateTimeButtons();
 
