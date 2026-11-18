@@ -193,6 +193,24 @@ main {
   font-size: 11px;
 }
 
+.tax-control {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+  font-size: 11px;
+}
+
+.tax-control strong {
+  color: #fde68a;
+}
+
+.panel input[type="range"] {
+  width: 100%;
+  margin: 5px 0 1px;
+  accent-color: #fbbf24;
+}
+
 .bar {
   height: 7px;
   margin-top: 4px;

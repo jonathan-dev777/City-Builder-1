@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>City Builder 1 — v0.8.0</title>
+  <title>City Builder 1 — v0.9.0</title>
   <link rel="stylesheet" href="style.css">
 </head>
 
@@ -14,7 +14,7 @@
   <div>
     <h1>
       City Builder 1
-      <span>v0.8.0</span>
+      <span>v0.9.0</span>
     </h1>
 
     <div class="subtitle">
@@ -193,6 +193,23 @@
 
 
     <section class="panel">
+      <h2>💰 Steuern</h2>
+      <label class="tax-control" for="taxResidential">
+        Einwohnersteuer <strong id="taxResidentialValue">10 €</strong>
+      </label>
+      <input id="taxResidential" type="range" min="0" max="20" step="1" value="10">
+      <label class="tax-control" for="taxCommercial">
+        Gewerbesteuer <strong id="taxCommercialValue">10 %</strong>
+      </label>
+      <input id="taxCommercial" type="range" min="0" max="25" step="1" value="10">
+      <label class="tax-control" for="taxIndustrial">
+        Industriesteuer <strong id="taxIndustrialValue">10 %</strong>
+      </label>
+      <input id="taxIndustrial" type="range" min="0" max="25" step="1" value="10">
+      <div class="row"><span>Steuern / Monat</span><strong id="taxRevenue">0 €</strong></div>
+    </section>
+
+    <section class="panel">
 
       <h2>Nachfrage</h2>
 
@@ -216,7 +233,8 @@
     <section class="panel">
       <h2>Monatsabrechnung</h2>
       <div class="row"><span>Betrieb</span><strong id="ledgerOperating">0 €</strong></div>
-      <div class="row"><span>Einwohnersteuer</span><strong id="ledgerResidentTax">0 €</strong></div>
+      <div class="row"><span>Steuern</span><strong id="ledgerResidentTax">0 €</strong></div>
+      <div class="row"><span>Betriebssteuern</span><strong id="ledgerBusinessTax">0 €</strong></div>
       <div class="row"><span>Straßenunterhalt</span><strong id="ledgerRoads">0 €</strong></div>
       <div class="row"><span>Kreditrate</span><strong id="ledgerLoan">0 €</strong></div>
       <div class="row"><span>Monatssaldo</span><strong id="ledgerNet">0 €</strong></div>
