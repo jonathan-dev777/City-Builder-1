@@ -490,6 +490,7 @@ function drawGrid() {
 
 function drawVehicles() {
   for (const vehicle of vehicles) {
+    if (!["toWork", "returning"].includes(vehicle.commuteState)) continue;
     if (!vehicle.route?.length) continue;
 
     const a = vehicle.route[Math.min(vehicle.index, vehicle.route.length - 1)];
@@ -1177,11 +1178,17 @@ function roadPath(start, goal) {
   return [];
 }
 
-function randomBuilding(type) {
+function activeVehicleCount() {
+  return vehicles.filter(vehicle =>
+    ["toWork", "returning"].includes(vehicle.commuteState)
+  ).length;
+}
+
+function randomBuilding(type, predicate = () => true) {
   const candidates = [];
 
   for (const [rawKey, tile] of Object.entries(grid)) {
-    if (tile.type !== type) continue;
+    if (tile.type !== type || !predicate(tile)) continue;
 
     const [x, y] = rawKey.split(",").map(Number);
 
@@ -1195,73 +1202,96 @@ function randomBuilding(type) {
 }
 
 function createVehicle() {
-  const home = randomBuilding("residential");
+  const home = randomBuilding("residential", tile => householdPopulation(tile) > 0);
   if (!home) return;
 
-  const workTypes = Math.random() < 0.5
-    ? "commercial"
-    : "industrial";
-
-  const work = randomBuilding(workTypes) || randomBuilding("commercial") || randomBuilding("industrial");
+  const work = randomBuilding("commercial", tile => tile.employees > 0) ||
+    randomBuilding("industrial", tile => tile.employees > 0);
   if (!work) return;
 
   const homeRoad = nearestRoad(home.x, home.y);
   const workRoad = nearestRoad(work.x, work.y);
   const outbound = roadPath(homeRoad, workRoad);
 
-  if (outbound.length < 2) return;
+  if (outbound.length < 2) return false;
 
   const returnRoute = [...outbound].reverse();
 
   vehicles.push({
-    type: workTypes,
+    type: work.tile.type,
     route: outbound,
     returnRoute,
     index: 0,
     progress: 0,
-    returning: false,
+    commuteState: "toWork",
+    passengers: Math.min(4, householdPopulation(home.tile), work.tile.employees),
     speed: 2.4 + Math.random() * 1.2
   });
+  return true;
 }
 
 function updateVehicles(deltaSeconds) {
-  vehicleSpawnTimer += deltaSeconds;
-
   const workers = calculateEmployment().employed;
   const desiredVehicles = clamp(Math.floor(workers * 0.55), 0, MAX_VEHICLES);
+  const phase = clamp(gameTimeAccumulator / MONTH_SECONDS, 0, 1);
+  const morning = phase < 0.25;
 
-  // Bei höherer Geschwindigkeit entstehen Fahrzeuge schneller.
-  while (
-    vehicles.length < desiredVehicles &&
-    vehicleSpawnTimer >= 0.12
-  ) {
-    vehicleSpawnTimer -= 0.12;
-    createVehicle();
+  if (vehicles.length > desiredVehicles) vehicles.length = desiredVehicles;
 
-    if (vehicles.length >= desiredVehicles) break;
-    if (vehicleSpawnTimer < 0) vehicleSpawnTimer = 0;
+  if (morning) {
+    vehicleSpawnTimer += deltaSeconds;
+    let attempts = 0;
+    while (vehicles.length < desiredVehicles && vehicleSpawnTimer >= 0.12 && attempts < 50) {
+      vehicleSpawnTimer -= 0.12;
+      attempts++;
+      if (!createVehicle() && vehicleSpawnTimer > 1) vehicleSpawnTimer = 0;
+    }
+  } else {
+    vehicleSpawnTimer = 0;
   }
 
   for (let i = vehicles.length - 1; i >= 0; i--) {
     const vehicle = vehicles[i];
+    if (vehicle.commuteState === "atHome" && morning) {
+      vehicle.route = vehicle.returnRoute.slice().reverse();
+      vehicle.index = 0;
+      vehicle.progress = 0;
+      vehicle.commuteState = "toWork";
+    }
+
+    if (vehicle.commuteState === "atWork" && phase >= 0.5) {
+      vehicle.route = vehicle.returnRoute;
+      vehicle.index = 0;
+      vehicle.progress = 0;
+      vehicle.commuteState = "returning";
+    }
+
+    if (!["toWork", "returning"].includes(vehicle.commuteState)) continue;
+
     const traffic = calculateTraffic();
     const speedFactor = traffic > 80 ? 0.45 : traffic > 60 ? 0.7 : 1;
 
     vehicle.progress += vehicle.speed * speedFactor * deltaSeconds;
 
-    if (vehicle.progress < 1) continue;
+    while (vehicle.progress >= 1) {
+      vehicle.progress -= 1;
+      vehicle.index++;
 
-    vehicle.progress = 0;
-    vehicle.index++;
+      if (vehicle.index < vehicle.route.length - 1) continue;
 
-    if (vehicle.index < vehicle.route.length - 1) continue;
-
-    if (!vehicle.returning) {
-      vehicle.returning = true;
-      vehicle.route = vehicle.returnRoute;
-      vehicle.index = 0;
-    } else {
-      vehicles.splice(i, 1);
+      if (vehicle.commuteState === "toWork") {
+        vehicle.commuteState = "atWork";
+        vehicle.progress = 0;
+        if (phase >= 0.5) {
+          vehicle.route = vehicle.returnRoute;
+          vehicle.index = 0;
+          vehicle.commuteState = "returning";
+        }
+      } else {
+        vehicle.commuteState = "atHome";
+        vehicle.progress = 0;
+      }
+      break;
     }
   }
 }
@@ -1269,13 +1299,14 @@ function updateVehicles(deltaSeconds) {
 function calculateTraffic() {
   const roads = countType("road");
   const trafficCapacity = roads * ROAD_CAPACITY;
+  const activeVehicles = activeVehicleCount();
 
   if (trafficCapacity <= 0) {
-    return vehicles.length > 0 ? 100 : 0;
+    return activeVehicles > 0 ? 100 : 0;
   }
 
   return clamp(
-    Math.round((vehicles.length / trafficCapacity) * 100),
+    Math.round((activeVehicles / trafficCapacity) * 100),
     0,
     100
   );
@@ -1647,7 +1678,7 @@ function getSaveKey(slot) {
 
 function getGameState() {
   return {
-    version: "0.13.0",
+    version: "0.14.0",
     money,
     population,
     year,
